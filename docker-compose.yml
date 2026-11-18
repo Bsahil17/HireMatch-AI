@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: hirematch-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: hirematchai
+      MYSQL_ROOT_PASSWORD: rootpassword
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - hirematch-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: hirematch-ai
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - LLM_PROVIDER=${LLM_PROVIDER:-LOCAL}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-gemini-1.5-flash}
+    networks:
+      - hirematch-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hirematch-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=mysql
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/hirematchai?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      - SPRING_DATASOURCE_USERNAME=root
+      - SPRING_DATASOURCE_PASSWORD=rootpassword
+      - AI_SERVICE_URL=http://ai-service:8000
+    depends_on:
+      mysql:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    networks:
+      - hirematch-network
+    volumes:
+      - backend_uploads:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: hirematch-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - hirematch-network
+
+volumes:
+  mysql_data:
+  backend_uploads:
+
+networks:
+  hirematch-network:
+    driver: bridge
